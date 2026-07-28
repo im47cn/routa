@@ -277,9 +277,10 @@ async fn install_acp_agent(
                 .get_binary_info(&platform)
                 .ok_or_else(|| format!("No binary available for platform: {platform}"))?;
 
+            let http_client = build_http_client()?;
             let exe_path = state
                 .binary_manager
-                .install_binary(&agent_id, &version, binary_info)
+                .install_binary_with_client(&http_client, &agent_id, &version, binary_info)
                 .await?;
 
             state

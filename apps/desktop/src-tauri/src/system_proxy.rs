@@ -24,7 +24,7 @@ struct ProxySettings {
 }
 
 impl ProxySettings {
-    fn url(&self) -> Option<String> {
+    fn url(&self, scheme: &str) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -36,14 +36,15 @@ impl ProxySettings {
         } else {
             host.to_string()
         };
-        Some(format!("http://{authority}:{port}"))
+        Some(format!("{scheme}://{authority}:{port}"))
     }
 }
 
-/// Parse the output of `scutil --proxy`, preferring HTTPS over HTTP settings.
+/// Parse `scutil --proxy`, preferring HTTPS, then HTTP, then SOCKS settings.
 fn parse_macos_system_proxy(output: &str) -> Option<String> {
     let mut https = ProxySettings::default();
     let mut http = ProxySettings::default();
+    let mut socks = ProxySettings::default();
 
     for line in output.lines() {
         let Some((key, value)) = line.trim().split_once(" : ") else {
@@ -58,11 +59,17 @@ fn parse_macos_system_proxy(output: &str) -> Option<String> {
             "HTTPEnable" => http.enabled = value == "1",
             "HTTPProxy" => http.host = Some(value.to_string()),
             "HTTPPort" => http.port = value.parse().ok(),
+            "SOCKSEnable" => socks.enabled = value == "1",
+            "SOCKSProxy" => socks.host = Some(value.to_string()),
+            "SOCKSPort" => socks.port = value.parse().ok(),
             _ => {}
         }
     }
 
-    https.url().or_else(|| http.url())
+    https
+        .url("http")
+        .or_else(|| http.url("http"))
+        .or_else(|| socks.url("socks5h"))
 }
 
 #[cfg(target_os = "macos")]
@@ -149,5 +156,22 @@ mod tests {
             parse_macos_system_proxy(output),
             Some("http://[::1]:6152".to_string())
         );
+    }
+
+    #[test]
+    fn falls_back_to_enabled_socks_proxy() {
+        let output = r#"
+<dictionary> {
+  HTTPEnable : 0
+  HTTPSEnable : 0
+  SOCKSEnable : 1
+  SOCKSPort : 1080
+  SOCKSProxy : 127.0.0.1
+}
+"#;
+
+        let proxy_url = parse_macos_system_proxy(output).expect("parse SOCKS proxy");
+        assert_eq!(proxy_url, "socks5h://127.0.0.1:1080");
+        reqwest::Proxy::all(proxy_url).expect("SOCKS proxy feature is enabled");
     }
 }

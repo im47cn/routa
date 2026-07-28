@@ -38,6 +38,22 @@ impl AcpBinaryManager {
         version: &str,
         binary_info: &BinaryInfo,
     ) -> Result<PathBuf, String> {
+        let http_client = reqwest::Client::new();
+        self.install_binary_with_client(&http_client, agent_id, version, binary_info)
+            .await
+    }
+
+    /// Download and install a binary agent with a caller-provided HTTP client.
+    ///
+    /// Runtime adapters can use this to preserve transport concerns such as
+    /// system proxy configuration without coupling them into the core domain.
+    pub async fn install_binary_with_client(
+        &self,
+        http_client: &reqwest::Client,
+        agent_id: &str,
+        version: &str,
+        binary_info: &BinaryInfo,
+    ) -> Result<PathBuf, String> {
         // Get or create a lock for this agent
         let lock = {
             let mut locks = self.download_locks.lock().await;
@@ -75,7 +91,7 @@ impl AcpBinaryManager {
 
         // Download the archive
         let archive_path = self
-            .download_archive(&binary_info.archive, &download_dir)
+            .download_archive_with_client(http_client, &binary_info.archive, &download_dir)
             .await?;
 
         // Extract the archive
@@ -103,10 +119,17 @@ impl AcpBinaryManager {
     }
 
     /// Download an archive from a URL.
-    async fn download_archive(&self, url: &str, download_dir: &Path) -> Result<PathBuf, String> {
+    async fn download_archive_with_client(
+        &self,
+        http_client: &reqwest::Client,
+        url: &str,
+        download_dir: &Path,
+    ) -> Result<PathBuf, String> {
         tracing::info!("[AcpBinaryManager] Downloading from {}", url);
 
-        let response = reqwest::get(url)
+        let response = http_client
+            .get(url)
+            .send()
             .await
             .map_err(|e| format!("Failed to download: {e}"))?;
 
@@ -329,5 +352,78 @@ impl AcpBinaryManager {
                 .map_err(|e| format!("Failed to remove agent directory: {e}"))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::AcpBinaryManager;
+    use crate::acp::AcpPaths;
+
+    #[tokio::test]
+    async fn download_archive_uses_caller_provided_http_client() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = socket.read(&mut chunk).await.expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            let request = String::from_utf8_lossy(&request);
+            let (status, body) = if request
+                .to_ascii_lowercase()
+                .contains("x-routa-test-client: configured")
+            {
+                ("200 OK", "binary")
+            } else {
+                ("403 Forbidden", "missing client header")
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-routa-test-client",
+            HeaderValue::from_static("configured"),
+        );
+        let http_client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("build configured client");
+        let temp_dir = tempfile::tempdir().expect("create download directory");
+        let manager = AcpBinaryManager::new(AcpPaths::new());
+
+        let archive = manager
+            .download_archive_with_client(
+                &http_client,
+                &format!("http://{address}/agent.bin"),
+                temp_dir.path(),
+            )
+            .await
+            .expect("download archive");
+
+        assert_eq!(
+            tokio::fs::read(archive).await.expect("read archive"),
+            b"binary"
+        );
+        server.await.expect("join test server");
     }
 }
