@@ -30,13 +30,14 @@ fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client,
     let builder = if environment_proxy_is_configured() {
         builder
     } else {
-        match read_macos_system_proxy().and_then(|proxy_url| {
-            reqwest::Proxy::all(proxy_url)
-                .ok()
-                .map(|proxy| proxy.no_proxy(reqwest::NoProxy::from_env()))
-        }) {
-            Some(proxy) => builder.proxy(proxy),
-            None => builder,
+        match read_macos_system_proxy() {
+            Some(settings) if settings.has_proxy() => {
+                let no_proxy = settings.no_proxy();
+                let proxy = reqwest::Proxy::custom(move |url| settings.proxy_for_url(url))
+                    .no_proxy(no_proxy);
+                builder.proxy(proxy)
+            }
+            _ => builder,
         }
     };
 
@@ -59,6 +60,7 @@ fn environment_proxy_is_configured_with(
         .any(|name| read_env(name).is_some_and(|value| !value.is_empty()))
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct ProxySettings {
     enabled: bool,
@@ -66,6 +68,7 @@ struct ProxySettings {
     port: Option<u16>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl ProxySettings {
     fn url(&self, scheme: &str) -> Option<String> {
         if !self.enabled {
@@ -83,19 +86,118 @@ impl ProxySettings {
     }
 }
 
-/// Parse `scutil --proxy`, preferring HTTPS, then HTTP, then SOCKS settings.
-fn parse_macos_system_proxy(output: &str) -> Option<String> {
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MacosProxySettings {
+    http: Option<String>,
+    https: Option<String>,
+    socks: Option<String>,
+    exceptions: Vec<String>,
+    exclude_simple_hostnames: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl MacosProxySettings {
+    fn has_proxy(&self) -> bool {
+        self.http.is_some() || self.https.is_some() || self.socks.is_some()
+    }
+
+    fn proxy_for_url(&self, url: &reqwest::Url) -> Option<String> {
+        if self.exclude_simple_hostnames
+            && url
+                .host_str()
+                .is_some_and(|host| !host.contains('.') && !host.contains(':'))
+        {
+            return None;
+        }
+
+        match url.scheme() {
+            "http" => self.http.clone().or_else(|| self.socks.clone()),
+            "https" => self.https.clone().or_else(|| self.socks.clone()),
+            _ => self.socks.clone(),
+        }
+    }
+
+    fn no_proxy(&self) -> Option<reqwest::NoProxy> {
+        let environment = std::env::var("NO_PROXY")
+            .or_else(|_| std::env::var("no_proxy"))
+            .ok();
+        let entries = self.no_proxy_entries(environment.as_deref());
+        if entries.is_empty() {
+            None
+        } else {
+            reqwest::NoProxy::from_string(&entries.join(","))
+        }
+    }
+
+    fn no_proxy_entries(&self, environment: Option<&str>) -> Vec<String> {
+        let mut entries: Vec<String> = self
+            .exceptions
+            .iter()
+            .filter_map(|entry| normalize_exception(entry))
+            .collect();
+        if let Some(environment) = environment {
+            entries.push(environment.to_string());
+        }
+        entries
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn normalize_exception(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+
+    Some(match entry.strip_prefix("*.") {
+        Some(suffix) => format!(".{suffix}"),
+        None => entry.to_string(),
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_exception_entry(line: &str) -> Option<String> {
+    let (index, value) = line.split_once(" : ")?;
+    index.trim().parse::<usize>().ok()?;
+    Some(value.trim().to_string())
+}
+
+/// Parse the protocol-specific proxies and bypass rules from `scutil --proxy`.
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_system_proxy(output: &str) -> MacosProxySettings {
     let mut https = ProxySettings::default();
     let mut http = ProxySettings::default();
     let mut socks = ProxySettings::default();
+    let mut exceptions = Vec::new();
+    let mut exclude_simple_hostnames = false;
+    let mut in_exceptions = false;
 
     for line in output.lines() {
-        let Some((key, value)) = line.trim().split_once(" : ") else {
+        let line = line.trim();
+
+        if in_exceptions {
+            match (line, parse_exception_entry(line)) {
+                ("}", _) => {
+                    in_exceptions = false;
+                    continue;
+                }
+                (_, Some(exception)) => {
+                    exceptions.push(exception);
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        let Some((key, value)) = line.split_once(" : ") else {
             continue;
         };
         let value = value.trim();
 
         match key.trim() {
+            "ExceptionsList" => in_exceptions = value.starts_with("<array>"),
+            "ExcludeSimpleHostnames" => exclude_simple_hostnames = value == "1",
             "HTTPSEnable" => https.enabled = value == "1",
             "HTTPSProxy" => https.host = Some(value.to_string()),
             "HTTPSPort" => https.port = value.parse().ok(),
@@ -109,14 +211,17 @@ fn parse_macos_system_proxy(output: &str) -> Option<String> {
         }
     }
 
-    https
-        .url("http")
-        .or_else(|| http.url("http"))
-        .or_else(|| socks.url("socks5h"))
+    MacosProxySettings {
+        http: http.url("http"),
+        https: https.url("http"),
+        socks: socks.url("socks5h"),
+        exceptions,
+        exclude_simple_hostnames,
+    }
 }
 
 #[cfg(target_os = "macos")]
-fn read_macos_system_proxy() -> Option<String> {
+fn read_macos_system_proxy() -> Option<MacosProxySettings> {
     let output = std::process::Command::new("scutil")
         .arg("--proxy")
         .output()
@@ -125,7 +230,9 @@ fn read_macos_system_proxy() -> Option<String> {
         return None;
     }
 
-    parse_macos_system_proxy(&String::from_utf8_lossy(&output.stdout))
+    Some(parse_macos_system_proxy(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 #[cfg(test)]
@@ -134,7 +241,7 @@ mod tests {
     use std::ffi::OsString;
 
     #[test]
-    fn prefers_enabled_https_proxy() {
+    fn preserves_protocol_specific_proxies() {
         let output = r#"
 <dictionary> {
   HTTPEnable : 1
@@ -145,15 +252,20 @@ mod tests {
   HTTPSProxy : 127.0.0.1
 }
 "#;
+        let settings = parse_macos_system_proxy(output);
 
         assert_eq!(
-            parse_macos_system_proxy(output),
+            settings.proxy_for_url(&reqwest::Url::parse("https://registry.example").unwrap()),
             Some("http://127.0.0.1:6152".to_string())
+        );
+        assert_eq!(
+            settings.proxy_for_url(&reqwest::Url::parse("http://archive.example").unwrap()),
+            Some("http://http-proxy.local:8080".to_string())
         );
     }
 
     #[test]
-    fn falls_back_to_enabled_http_proxy() {
+    fn does_not_use_http_proxy_for_https_requests() {
         let output = r#"
 <dictionary> {
   HTTPEnable : 1
@@ -164,10 +276,15 @@ mod tests {
   HTTPSProxy : 127.0.0.1
 }
 "#;
+        let settings = parse_macos_system_proxy(output);
 
         assert_eq!(
-            parse_macos_system_proxy(output),
+            settings.proxy_for_url(&reqwest::Url::parse("http://archive.example").unwrap()),
             Some("http://proxy.local:8080".to_string())
+        );
+        assert_eq!(
+            settings.proxy_for_url(&reqwest::Url::parse("https://registry.example").unwrap()),
+            None
         );
     }
 
@@ -183,7 +300,7 @@ mod tests {
 }
 "#;
 
-        assert_eq!(parse_macos_system_proxy(output), None);
+        assert!(!parse_macos_system_proxy(output).has_proxy());
     }
 
     #[test]
@@ -197,7 +314,8 @@ mod tests {
 "#;
 
         assert_eq!(
-            parse_macos_system_proxy(output),
+            parse_macos_system_proxy(output)
+                .proxy_for_url(&reqwest::Url::parse("https://registry.example").unwrap()),
             Some("http://[::1]:6152".to_string())
         );
     }
@@ -214,9 +332,44 @@ mod tests {
 }
 "#;
 
-        let proxy_url = parse_macos_system_proxy(output).expect("parse SOCKS proxy");
-        assert_eq!(proxy_url, "socks5h://127.0.0.1:1080");
-        reqwest::Proxy::all(proxy_url).expect("SOCKS proxy feature is enabled");
+        let settings = parse_macos_system_proxy(output);
+        for url in ["http://archive.example", "https://registry.example"] {
+            assert_eq!(
+                settings.proxy_for_url(&reqwest::Url::parse(url).unwrap()),
+                Some("socks5h://127.0.0.1:1080".to_string())
+            );
+        }
+        reqwest::Proxy::all(settings.socks.unwrap()).expect("SOCKS proxy feature is enabled");
+    }
+
+    #[test]
+    fn parses_macos_bypass_rules() {
+        let output = r#"
+<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : 169.254.0.0/16
+  }
+  ExcludeSimpleHostnames : 1
+  HTTPSEnable : 1
+  HTTPSPort : 6152
+  HTTPSProxy : proxy.local
+}
+"#;
+        let settings = parse_macos_system_proxy(output);
+
+        assert_eq!(
+            settings.no_proxy_entries(Some("internal.example")),
+            [".local", "169.254.0.0/16", "internal.example"]
+        );
+        assert_eq!(
+            settings.proxy_for_url(&reqwest::Url::parse("https://intranet/path").unwrap()),
+            None
+        );
+        assert_eq!(
+            settings.proxy_for_url(&reqwest::Url::parse("https://public.example/path").unwrap()),
+            Some("http://proxy.local:6152".to_string())
+        );
     }
 
     #[test]
