@@ -1,19 +1,62 @@
 use std::time::Duration;
 
-/// Build an HTTP client that respects the macOS system proxy when configured.
-pub(crate) fn build_http_client() -> Result<reqwest::Client, String> {
-    let builder = reqwest::Client::builder().timeout(Duration::from_secs(15));
+#[cfg(any(target_os = "macos", test))]
+const PROXY_ENV_VARS: [&str; 6] = [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+];
 
+/// Build an HTTP client for the small ACP registry response.
+pub(crate) fn build_registry_http_client() -> Result<reqwest::Client, String> {
+    build_http_client(reqwest::Client::builder().timeout(Duration::from_secs(15)))
+}
+
+/// Build an HTTP client for agent archives without imposing a total transfer deadline.
+pub(crate) fn build_download_http_client() -> Result<reqwest::Client, String> {
+    build_http_client(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(60)),
+    )
+}
+
+/// Apply the macOS system proxy only when an environment proxy is not configured.
+fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client, String> {
     #[cfg(target_os = "macos")]
-    let builder =
-        match read_macos_system_proxy().and_then(|proxy_url| reqwest::Proxy::all(proxy_url).ok()) {
+    let builder = if environment_proxy_is_configured() {
+        builder
+    } else {
+        match read_macos_system_proxy().and_then(|proxy_url| {
+            reqwest::Proxy::all(proxy_url)
+                .ok()
+                .map(|proxy| proxy.no_proxy(reqwest::NoProxy::from_env()))
+        }) {
             Some(proxy) => builder.proxy(proxy),
             None => builder,
-        };
+        }
+    };
 
     builder
         .build()
         .map_err(|error| format!("Failed to build HTTP client: {error}"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn environment_proxy_is_configured() -> bool {
+    environment_proxy_is_configured_with(|name| std::env::var_os(name))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn environment_proxy_is_configured_with(
+    mut read_env: impl FnMut(&str) -> Option<std::ffi::OsString>,
+) -> bool {
+    PROXY_ENV_VARS
+        .iter()
+        .any(|name| read_env(name).is_some_and(|value| !value.is_empty()))
 }
 
 #[derive(Default)]
@@ -87,7 +130,8 @@ fn read_macos_system_proxy() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_macos_system_proxy;
+    use super::{environment_proxy_is_configured_with, parse_macos_system_proxy};
+    use std::ffi::OsString;
 
     #[test]
     fn prefers_enabled_https_proxy() {
@@ -173,5 +217,19 @@ mod tests {
         let proxy_url = parse_macos_system_proxy(output).expect("parse SOCKS proxy");
         assert_eq!(proxy_url, "socks5h://127.0.0.1:1080");
         reqwest::Proxy::all(proxy_url).expect("SOCKS proxy feature is enabled");
+    }
+
+    #[test]
+    fn recognizes_uppercase_and_lowercase_environment_proxies() {
+        for configured_name in ["ALL_PROXY", "https_proxy", "HTTP_PROXY"] {
+            assert!(environment_proxy_is_configured_with(|name| {
+                (name == configured_name).then(|| OsString::from("http://proxy.local:8080"))
+            }));
+        }
+
+        assert!(!environment_proxy_is_configured_with(|_| None));
+        assert!(!environment_proxy_is_configured_with(|_| {
+            Some(OsString::new())
+        }));
     }
 }
