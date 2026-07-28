@@ -103,7 +103,8 @@ describe("AgentInstallPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isTauriRuntimeMock.mockReturnValue(false);
-    vi.stubGlobal("fetch", vi.fn(async () => responseLike(registryResponse())));
+    delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    desktopAwareFetchMock.mockImplementation(async () => responseLike(registryResponse()));
   });
 
   it("loads registry agents, filters by search, and refreshes", async () => {
@@ -122,23 +123,21 @@ describe("AgentInstallPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith("/api/acp/registry?refresh=true");
+      expect(desktopAwareFetchMock).toHaveBeenCalledWith("/api/acp/registry?refresh=true");
     });
   });
 
   it("installs and uninstalls agents through the web API", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    desktopAwareFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith("/api/acp/registry")) {
         return responseLike(registryResponse());
       }
+      if (url === "/api/acp/install") {
+        return responseLike({ success: true });
+      }
       throw new Error(`unexpected url: ${url}`);
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    desktopAwareFetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true }) });
 
     render(<AgentInstallPanel />);
 
@@ -160,17 +159,17 @@ describe("AgentInstallPanel", () => {
   });
 
   it("shows registry and install errors", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => responseLike({}, { ok: false, status: 500 })) as unknown as typeof fetch);
+    desktopAwareFetchMock.mockResolvedValueOnce(responseLike({}, { ok: false, status: 500 }));
 
     render(<AgentInstallPanel embedded />);
 
     expect(await screen.findByText("Failed to fetch registry: 500")).not.toBeNull();
 
-    vi.stubGlobal("fetch", vi.fn(async () => responseLike(registryResponse())) as unknown as typeof fetch);
-
-    desktopAwareFetchMock.mockResolvedValueOnce({
-      ok: false,
-      json: async () => ({ error: "Install exploded" }),
+    desktopAwareFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/acp/registry")) {
+        return responseLike(registryResponse());
+      }
+      return responseLike({ error: "Install exploded" }, { ok: false, status: 500 });
     });
 
     render(<AgentInstallPanel embedded />);
@@ -178,5 +177,18 @@ describe("AgentInstallPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Install" }));
 
     expect(await screen.findByText("Install exploded")).not.toBeNull();
+  });
+
+  it("preserves string errors returned by Tauri invoke", async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    (window as typeof window & {
+      __TAURI_INTERNALS__?: { invoke: ReturnType<typeof vi.fn> };
+    }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn().mockRejectedValue("Failed to fetch registry: proxy unavailable"),
+    };
+
+    render(<AgentInstallPanel />);
+
+    expect(await screen.findByText("Failed to fetch registry: proxy unavailable")).not.toBeNull();
   });
 });

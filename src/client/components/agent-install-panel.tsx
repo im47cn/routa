@@ -200,7 +200,7 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
         } else {
           // Web: Use API routes
           const url = resolveApiPath(refresh ? "/api/acp/registry?refresh=true" : "/api/acp/registry");
-          const res = await fetch(url);
+          const res = await desktopAwareFetch(url);
           if (!res.ok) throw new Error(`Failed to fetch registry: ${res.status}`);
           const data: RegistryResponse = await res.json();
           setAgents(data.agents);
