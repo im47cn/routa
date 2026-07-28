@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Image from "next/image";
 import { isTauriRuntime, desktopAwareFetch } from "@/client/utils/diagnostics";
+import { resolveApiPath } from "@/client/config/backend";
 import { useTranslation } from "@/i18n";
 import { Search, Bot } from "lucide-react";
 
@@ -198,7 +199,7 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
           setRuntimeAvailability({ npx: true, uvx: true });
         } else {
           // Web: Use API routes
-          const url = refresh ? "/api/acp/registry?refresh=true" : "/api/acp/registry";
+          const url = resolveApiPath(refresh ? "/api/acp/registry?refresh=true" : "/api/acp/registry");
           const res = await fetch(url);
           if (!res.ok) throw new Error(`Failed to fetch registry: ${res.status}`);
           const data: RegistryResponse = await res.json();
@@ -207,7 +208,8 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
           setRuntimeAvailability(data.runtimeAvailability);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : t.agents.failedToLoad);
+        const msg = err instanceof Error ? err.message : typeof err === "string" ? err : t.agents.failedToLoad;
+        setError(msg);
       } finally {
         setLoading(false);
       }

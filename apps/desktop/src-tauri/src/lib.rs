@@ -160,6 +160,84 @@ impl AcpState {
 const ACP_REGISTRY_URL: &str =
     "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
+/// Build a reqwest client that respects macOS system proxy settings.
+///
+/// reqwest's default proxy detection only reads `HTTP_PROXY`/`HTTPS_PROXY`
+/// environment variables. On macOS, proxy software like Surge, ClashX, or
+/// V2Ray configure the system proxy via `networksetup` (System Preferences),
+/// which reqwest ignores. This function reads the macOS system proxy via
+/// `scutil --proxy` and applies it to the client.
+fn build_http_client() -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15));
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(proxy_url) = read_macos_system_proxy() {
+            if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+                builder = builder.proxy(proxy);
+            }
+        }
+    }
+
+    builder.build().map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+/// Read the macOS system HTTPS proxy via `scutil --proxy`.
+/// Returns `http://host:port` if an HTTPS proxy is enabled, `None` otherwise.
+#[cfg(target_os = "macos")]
+fn read_macos_system_proxy() -> Option<String> {
+    let output = std::process::Command::new("scutil")
+        .arg("--proxy")
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut enabled = false;
+    let mut host: Option<String> = None;
+    let mut port: Option<String> = None;
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("HTTPSEnable : ") {
+            enabled = v.trim() == "1";
+        } else if let Some(v) = line.strip_prefix("HTTPSProxy : ") {
+            host = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("HTTPSPort : ") {
+            port = Some(v.trim().to_string());
+        }
+    }
+
+    if enabled {
+        if let (Some(h), Some(p)) = (host, port) {
+            return Some(format!("http://{h}:{p}"));
+        }
+    }
+
+    // Fall back to HTTP proxy if HTTPS proxy is not configured
+    let mut http_enabled = false;
+    let mut http_host: Option<String> = None;
+    let mut http_port: Option<String> = None;
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("HTTPEnable : ") {
+            http_enabled = v.trim() == "1";
+        } else if let Some(v) = line.strip_prefix("HTTPProxy : ") {
+            http_host = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("HTTPPort : ") {
+            http_port = Some(v.trim().to_string());
+        }
+    }
+
+    if http_enabled {
+        if let (Some(h), Some(p)) = (http_host, http_port) {
+            return Some(format!("http://{h}:{p}"));
+        }
+    }
+
+    None
+}
+
 /// Fetch the ACP registry from the CDN.
 #[tauri::command]
 async fn fetch_acp_registry(state: State<'_, AcpState>) -> Result<AcpRegistry, String> {
@@ -171,8 +249,11 @@ async fn fetch_acp_registry(state: State<'_, AcpState>) -> Result<AcpRegistry, S
         }
     }
 
-    // Fetch from CDN
-    let response = reqwest::get(ACP_REGISTRY_URL)
+    // Fetch from CDN (with macOS system proxy support)
+    let client = build_http_client()?;
+    let response = client
+        .get(ACP_REGISTRY_URL)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch registry: {e}"))?;
 
@@ -215,8 +296,11 @@ async fn install_acp_agent(
     let registry = match registry {
         Some(r) => r,
         None => {
-            // Fetch if not cached
-            let response = reqwest::get(ACP_REGISTRY_URL)
+            // Fetch if not cached (with macOS system proxy support)
+            let client = build_http_client()?;
+            let response = client
+                .get(ACP_REGISTRY_URL)
+                .send()
                 .await
                 .map_err(|e| format!("Failed to fetch registry: {e}"))?;
             response
