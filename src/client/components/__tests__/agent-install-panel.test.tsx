@@ -91,6 +91,24 @@ function registryResponse() {
   };
 }
 
+function tauriRegistryResponse() {
+  return {
+    agents: [
+      {
+        id: "crafter",
+        name: "Crafter",
+        version: "1.0.0",
+        description: "Writes code",
+        authors: ["Routa"],
+        license: "MIT",
+        distribution: {
+          npx: { package: "@acme/crafter" },
+        },
+      },
+    ],
+  };
+}
+
 function responseLike(data: unknown, init?: { ok?: boolean; status?: number }) {
   return {
     ok: init?.ok ?? true,
@@ -190,5 +208,57 @@ describe("AgentInstallPanel", () => {
     render(<AgentInstallPanel />);
 
     expect(await screen.findByText("Failed to fetch registry: proxy unavailable")).not.toBeNull();
+  });
+
+  it.each([
+    {
+      command: "install_acp_agent",
+      button: "Install",
+      installedAgents: [],
+      error: "Binary download failed behind proxy",
+    },
+    {
+      command: "uninstall_acp_agent",
+      button: "Uninstall",
+      installedAgents: [
+        {
+          agentId: "crafter",
+          version: "1.0.0",
+          distType: "npx",
+          installedAt: "2026-07-28T00:00:00Z",
+          package: "@acme/crafter",
+        },
+      ],
+      error: "Failed to remove installed agent",
+    },
+  ])("preserves Tauri string errors from $command", async ({
+    command,
+    button,
+    installedAgents,
+    error,
+  }) => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    (window as typeof window & {
+      __TAURI_INTERNALS__?: { invoke: ReturnType<typeof vi.fn> };
+    }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn((invokedCommand: string) => {
+        if (invokedCommand === "fetch_acp_registry") {
+          return Promise.resolve(tauriRegistryResponse());
+        }
+        if (invokedCommand === "get_installed_agents") {
+          return Promise.resolve(installedAgents);
+        }
+        if (invokedCommand === command) {
+          return Promise.reject(error);
+        }
+        return Promise.reject(new Error(`unexpected command: ${invokedCommand}`));
+      }),
+    };
+
+    render(<AgentInstallPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: button }));
+
+    expect(await screen.findByText(error)).not.toBeNull();
   });
 });

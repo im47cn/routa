@@ -128,6 +128,11 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
   throw new Error("Tauri invoke not available - not running in Tauri environment");
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === "string" ? error : fallback;
+}
+
 // ─── Component ─────────────────────────────────────────────────────────────
 
 interface AgentInstallPanelProps {
@@ -208,8 +213,7 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
           setRuntimeAvailability(data.runtimeAvailability);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : typeof err === "string" ? err : t.agents.failedToLoad;
-        setError(msg);
+        setError(getErrorMessage(err, t.agents.failedToLoad));
       } finally {
         setLoading(false);
       }
@@ -255,7 +259,7 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
         }
         await fetchAgents();
       } catch (err) {
-        setError(err instanceof Error ? err.message : t.agents.installFailed);
+        setError(getErrorMessage(err, t.agents.installFailed));
       } finally {
         setInstallingAgents((prev) => {
           const next = new Set(prev);
@@ -289,7 +293,7 @@ export function AgentInstallPanel({ embedded = false }: AgentInstallPanelProps) 
         }
         await fetchAgents();
       } catch (err) {
-        setError(err instanceof Error ? err.message : t.agents.uninstallFailed);
+        setError(getErrorMessage(err, t.agents.uninstallFailed));
       } finally {
         setInstallingAgents((prev) => {
           const next = new Set(prev);
