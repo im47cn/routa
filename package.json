@@ -243,7 +243,7 @@
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.11.1",
     "node-pty": "^1.1.0",
     "opencode-ai": "latest"
   },
