@@ -42,7 +42,7 @@ const {
 } = resolveFeatureTreeGeneratorRuntime(featureTreeGeneratorModule as FeatureTreeGeneratorModuleShape);
 const { INFERRED_GROUP_ID, buildApiLookupKey, normalizeSurfaceMetadata } = featureSurfaceMetadata;
 
-type GenerateFeatureTreeArtifacts = (options: {
+type _GenerateFeatureTreeArtifacts = (options: {
   repoRoot: string;
   scanRoot?: string;
   metadata?: FeatureMetadata | null;
@@ -56,7 +56,7 @@ type GenerateFeatureTreeArtifacts = (options: {
   apisCount: number;
 }>;
 
-type FeatureTreePreflightResult = {
+type _FeatureTreePreflightResult = {
   repoRoot: string;
   selectedScanRoot: string;
   frameworksDetected: string[];
@@ -1298,7 +1298,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const metadata = loadPersistedFeatureMetadata(existingFeatureTree, existingSurfaceIndex);
   const apiFeatures = extractApiFeatures(apiContract);
   const tree = buildFeatureTree(routes, apiFeatures);
-  const surfaceIndex = buildFeatureSurfaceIndex(routes, apiFeatures, nextjsApis, rustApis, metadata);
+  void buildFeatureSurfaceIndex(routes, apiFeatures, nextjsApis, rustApis, metadata);
 
   if (args.has("--mermaid")) {
     console.log(renderMermaid(tree));

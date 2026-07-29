@@ -70,7 +70,7 @@ const FAMILY_KEYS: SearchToolFamily[] = [
   "custom_glob",
 ];
 
-const PATTERN_CATEGORY_KEYS: SearchPatternCategory[] = [
+const _PATTERN_CATEGORY_KEYS: SearchPatternCategory[] = [
   "path_like",
   "symbol_like",
   "natural_language",
@@ -654,7 +654,7 @@ function collectJsonlFiles(rootPath: string, maxFiles?: number): string[] {
       continue;
     }
 
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

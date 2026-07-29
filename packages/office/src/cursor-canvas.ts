@@ -1322,6 +1322,7 @@ function officeRenderPresentationRuntimeInline(): string {
       `Missing @autodev/office-render Cursor runtime at ${runtimePath}. ` +
         "Run `npm --prefix packages/office-render run build` before generating a PPTX Cursor Canvas. " +
         message,
+      { cause: error },
     );
   }
 }

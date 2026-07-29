@@ -771,7 +771,7 @@ function extractSpringControllerRoutes(repoRoot: string): SpringControllerRoute[
     const classBasePath = classMappings[0]?.path ?? "";
 
     const methodRegex =
-      /((?:@\w+(?:\((?:[^()]|\([^()]*\))*\))?\s*)+)\s*public\s+[A-Za-z0-9_<>,?.\[\]\s]+\s+(\w+)\s*\((?:[^()]|\([^()]*\))*\)\s*(?:throws\s+[A-Za-z0-9_<>,?.\[\]\s]+)?\s*\{/gs;
+      /((?:@\w+(?:\((?:[^()]|\([^()]*\))*\))?\s*)+)\s*public\s+[A-Za-z0-9_<>,?.[\]\s]+\s+(\w+)\s*\((?:[^()]|\([^()]*\))*\)\s*(?:throws\s+[A-Za-z0-9_<>,?.[\]\s]+)?\s*\{/gs;
     let match: RegExpExecArray | null;
 
     while ((match = methodRegex.exec(content)) !== null) {

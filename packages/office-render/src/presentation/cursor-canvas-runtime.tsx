@@ -64,7 +64,10 @@ export function PresentationCursorCanvas({
     0,
     slides.findIndex((slide) => asNumber(slide.index, 1) === selectedIndex),
   );
-  const selectedSlide = slides[selectedPosition] ?? slides[0] ?? {};
+  const selectedSlide = useMemo(
+    () => slides[selectedPosition] ?? slides[0] ?? {},
+    [slides, selectedPosition],
+  );
   const selectedSlideIndex = asNumber(selectedSlide.index, selectedPosition + 1);
   const title = asString(artifact.title) || "Presentation";
 
@@ -77,7 +80,11 @@ export function PresentationCursorCanvas({
     if (slides.some((slide) => asNumber(slide.index, 1) === selectedIndex)) {
       return;
     }
-    setSelectedIndex(asNumber(slides[0]?.index, 1));
+    const firstIndex = asNumber(slides[0]?.index, 1);
+    if (firstIndex !== selectedIndex) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync when slide set changes and current index is stale
+      setSelectedIndex(firstIndex);
+    }
   }, [selectedIndex, slides]);
 
   const goPrevious = useCallback(() => {
@@ -151,6 +158,7 @@ export function PresentationCursorCanvas({
               >
                 <span style={styles.thumbnailNumber}>{slideIndex}</span>
                 {thumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- office thumbnail, not a Next.js route image
                   <img
                     alt=""
                     src={thumbnail}
@@ -430,7 +438,8 @@ function useLoadedCanvasImages(
     const next = new Map<string, CanvasImageSource>();
     const entries = Object.entries(media);
     if (entries.length === 0) {
-      setImages(next);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync when media set is empty
+      if (!cancelled) setImages(next);
       return;
     }
 

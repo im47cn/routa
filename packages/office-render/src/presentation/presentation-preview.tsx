@@ -385,7 +385,7 @@ function SlideshowOverlay({
   const frameSize = useElementSize(frameRef);
   const didEnterFullscreenRef = useRef(typeof document !== "undefined" && document.fullscreenElement != null);
   const selectedIndex = Math.min(activeSlideIndex, Math.max(0, slides.length - 1));
-  const slide = slides[selectedIndex] ?? {};
+  const slide = useMemo(() => slides[selectedIndex] ?? {}, [slides, selectedIndex]);
   const frame = getSlideFrameSize(slide, layouts);
   const fit = computePresentationFit(frameSize, frame, { padding: 0 });
   const canvasWidth = Math.max(1, fit.width);
@@ -396,11 +396,8 @@ function SlideshowOverlay({
   const showSpeakerNotesLabel = labels.showSpeakerNotes ?? speakerNotesLabel;
   const hideSpeakerNotesLabel = labels.hideSpeakerNotes ?? speakerNotesLabel;
 
-  useEffect(() => {
-    if (!hasSpeakerNotes) {
-      setShowSpeakerNotes(false);
-    }
-  }, [hasSpeakerNotes]);
+  // When there are no speaker notes, the panel cannot be shown.
+  const canShowSpeakerNotes = hasSpeakerNotes && showSpeakerNotes;
 
   const goPrevious = useCallback(() => {
     setActiveSlideIndex(Math.max(0, selectedIndex - 1));
@@ -508,7 +505,7 @@ function SlideshowOverlay({
         {hasSpeakerNotes ? (
           <button
             aria-label={showSpeakerNotes ? hideSpeakerNotesLabel : showSpeakerNotesLabel}
-            aria-pressed={showSpeakerNotes}
+            aria-pressed={canShowSpeakerNotes}
             className={styles.slideshowIconButton}
             data-testid="presentation-speaker-notes-toggle"
             onClick={() => setShowSpeakerNotes((isOpen) => !isOpen)}
@@ -521,7 +518,7 @@ function SlideshowOverlay({
           <PresentationIcon name="close" />
         </button>
       </div>
-      <div className={styles.slideshowPresenterLayout} data-notes-open={showSpeakerNotes && hasSpeakerNotes}>
+      <div className={styles.slideshowPresenterLayout} data-notes-open={canShowSpeakerNotes}>
         <button
           aria-label={labels.nextSlide}
           className={styles.slideshowFrame}
@@ -540,7 +537,7 @@ function SlideshowOverlay({
             width={canvasWidth}
           />
         </button>
-        {showSpeakerNotes && hasSpeakerNotes ? (
+        {canShowSpeakerNotes ? (
           <aside className={styles.slideshowNotesPanel} data-testid="presentation-speaker-notes">
             <div className={styles.slideshowNotesTitle}>{speakerNotesLabel}</div>
             <pre className={styles.slideshowNotesText}>{speakerNotes}</pre>

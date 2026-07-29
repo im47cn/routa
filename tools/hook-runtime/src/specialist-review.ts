@@ -429,7 +429,7 @@ async function callReviewProvider(params: {
         provider: fallbackProvider,
       });
       if (validate && !validate(raw)) {
-        throw new Error(`Automatic review specialist returned an invalid verdict: ${raw || "(empty response)"}`);
+        throw new Error(`Automatic review specialist returned an invalid verdict: ${raw || "(empty response)"}`, { cause: primaryError });
       }
       return raw;
     } catch (fallbackError) {

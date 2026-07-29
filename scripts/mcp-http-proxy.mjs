@@ -76,7 +76,7 @@ proxy.setRequestHandler(GetPromptRequestSchema, async (request) => {
 });
 
 let upstreamTransport;
-let stdioTransport;
+let stdioTransport; // eslint-disable-line prefer-const -- may be undefined until connect()
 let shuttingDown = false;
 
 async function shutdown(reason) {
@@ -101,7 +101,7 @@ function formatError(err) {
 
 // Connect to upstream first, then start stdio server
 try {
-  upstreamTransport = new StreamableHTTPClientTransport(new URL(normalizedEndpoint), {
+  upstreamTransport = new StreamableHTTPClientTransport(new globalThis.URL(normalizedEndpoint), {
     requestInit: headers ? { headers } : undefined,
   });
   await upstreamClient.connect(upstreamTransport);

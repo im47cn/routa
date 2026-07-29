@@ -93,15 +93,11 @@ function modulateSaturation(
   const saturation = lightness > 0.5
     ? delta / (2 - max - min)
     : delta / (max + min);
-  let hue = 0;
-  if (max === channels[0]) {
-    hue = (channels[1]! - channels[2]!) / delta + (channels[1]! < channels[2]! ? 6 : 0);
-  } else if (max === channels[1]) {
-    hue = (channels[2]! - channels[0]!) / delta + 2;
-  } else {
-    hue = (channels[0]! - channels[1]!) / delta + 4;
-  }
-  hue /= 6;
+  const hue = (max === channels[0]
+    ? (channels[1]! - channels[2]!) / delta + (channels[1]! < channels[2]! ? 6 : 0)
+    : max === channels[1]
+      ? (channels[2]! - channels[0]!) / delta + 2
+      : (channels[0]! - channels[1]!) / delta + 4) / 6;
 
   return hslToRgb(hue, Math.max(0, Math.min(1, saturation * factor)), lightness);
 }
